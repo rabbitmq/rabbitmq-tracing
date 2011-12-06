@@ -23,8 +23,6 @@
 -import(rabbit_misc, [pget/2, pget/3, table_lookup/2]).
 
 -record(state, {conn, ch, vhost, queue, file, filename, format}).
--record(log_record, {timestamp, type, exchange, queue, node, routing_keys,
-                     properties, payload}).
 
 -define(X, <<"amq.rabbitmq.trace">>).
 
@@ -98,10 +96,11 @@ handle_call(_Req, _From, State) ->
 handle_cast(_C, State) ->
     {noreply, State}.
 
-handle_info(Delivery = {#'basic.deliver'{delivery_tag = Seq}, #amqp_msg{}},
-            State    = #state{ch = Ch, file = F, format = Format}) ->
+handle_info({#'basic.deliver'{routing_key  = RKey,
+                              delivery_tag = Seq}, Msg = #amqp_msg{}},
+            State = #state{ch = Ch, file = F, format = Format}) ->
     Print = fun(Fmt, Args) -> io:format(F, Fmt, Args) end,
-    log(Format, Print, delivery_to_log_record(Delivery)),
+    log(Format, Print, unpack(RKey, Msg)),
     amqp_channel:cast(Ch, #'basic.ack'{delivery_tag = Seq}),
     {noreply, State};
 
@@ -123,51 +122,44 @@ code_change(_, State, _) -> {ok, State}.
 
 %%----------------------------------------------------------------------------
 
-delivery_to_log_record({#'basic.deliver'{routing_key = Key},
-                        #amqp_msg{props   = #'P_basic'{headers = H},
-                                  payload = Payload}}) ->
-    {Type, Q} = case Key of
-                    <<"publish.", _Rest/binary>> -> {published, none};
-                    <<"deliver.", Rest/binary>>  -> {received,  Rest}
-                end,
+unpack(<<"publish.", _/binary>>, Msg) -> unpack(published, none, Msg);
+unpack(<<"deliver.", Q/binary>>, Msg) -> unpack(received, Q, Msg).
+
+unpack(Type, Q, #amqp_msg{props   = #'P_basic'{headers = H},
+                          payload = Payload}) ->
     {longstr, Node} = table_lookup(H, <<"node">>),
     {longstr, X}    = table_lookup(H, <<"exchange_name">>),
     {array, Keys}   = table_lookup(H, <<"routing_keys">>),
     {table, Props}  = table_lookup(H, <<"properties">>),
-    #log_record{timestamp    = rabbit_mgmt_format:timestamp(os:timestamp()),
-                type         = Type,
-                exchange     = X,
-                queue        = Q,
-                node         = Node,
-                routing_keys = [K || {_, K} <- Keys],
-                properties   = Props,
-                payload      = Payload}.
+    [{timestamp,    rabbit_mgmt_format:timestamp(os:timestamp())},
+     {type,         Type},
+     {exchange,     X},
+     {queue,        Q},
+     {node,         Node},
+     {routing_keys, [K || {_, K} <- Keys]},
+     {properties,   Props},
+     {payload,      Payload}].
 
-log(text, P, Record) ->
+log(text, P, Event) ->
     P("~n~s~n", [string:copies("=", 80)]),
-    P("~s: ", [Record#log_record.timestamp]),
-    case Record#log_record.type of
+    P("~s: ", [pget(timestamp, Event)]),
+    case pget(type, Event) of
         published -> P("Message published~n~n", []);
         received  -> P("Message received~n~n", [])
     end,
-    P("Node:         ~s~n", [Record#log_record.node]),
-    P("Exchange:     ~s~n", [Record#log_record.exchange]),
-    case Record#log_record.queue of
+    P("Node:         ~s~n", [pget(node, Event)]),
+    P("Exchange:     ~s~n", [pget(exchange, Event)]),
+    case pget(queue, Event) of
         none -> ok;
         Q    -> P("Queue:        ~s~n", [Q])
     end,
-    P("Routing keys: ~p~n", [Record#log_record.routing_keys]),
-    P("Properties:   ~p~n", [Record#log_record.properties]),
-    P("Payload: ~n~s~n",    [Record#log_record.payload]);
+    P("Routing keys: ~p~n", [pget(routing_keys, Event)]),
+    P("Properties:   ~p~n", [pget(properties, Event)]),
+    P("Payload: ~n~s~n",    [pget(payload, Event)]);
 
-log(json, P, Record) ->
-    P("~s~n", [mochijson2:encode(
-                 [{timestamp,    Record#log_record.timestamp},
-                  {type,         Record#log_record.type},
-                  {node,         Record#log_record.node},
-                  {exchange,     Record#log_record.exchange},
-                  {queue,        Record#log_record.queue},
-                  {routing_keys, Record#log_record.routing_keys},
-                  {properties,   rabbit_mgmt_format:amqp_table(
-                                   Record#log_record.properties)},
-                  {payload,      base64:encode(Record#log_record.payload)}])]).
+log(json, P, Event) ->
+    Event1 = rabbit_mgmt_format:format(
+               Event,
+               [{fun rabbit_mgmt_format:amqp_table/1, [properties]},
+                {fun base64:encode/1,                 [payload]}]),
+    P("~s~n", [mochijson2:encode(Event1)]).
