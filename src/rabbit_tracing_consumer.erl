@@ -47,9 +47,11 @@ init(Args) ->
                    true -> Username0;
                    false -> list_to_binary(Username0)
                end,
+    P = [{<<"suppress-tracing">>, bool, true}],
     {ok, Conn} = amqp_connection:start(
-                   #amqp_params_direct{username     = Username,
-                                       virtual_host = VHost}),
+                   #amqp_params_direct{username          = Username,
+                                       virtual_host      = VHost,
+                                       client_properties = P}),
     link(Conn),
     {ok, Ch} = amqp_connection:open_channel(Conn),
     link(Ch),
