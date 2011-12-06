@@ -100,7 +100,8 @@ handle_info({#'basic.deliver'{routing_key  = RKey,
                               delivery_tag = Seq}, Msg = #amqp_msg{}},
             State = #state{ch = Ch, file = F, format = Format}) ->
     Print = fun(Fmt, Args) -> io:format(F, Fmt, Args) end,
-    log(Format, Print, unpack(RKey, Msg)),
+    Event = unpack(RKey, Msg),
+    log(Format, pget(supertype, Event), Print, Event),
     amqp_channel:cast(Ch, #'basic.ack'{delivery_tag = Seq}),
     {noreply, State};
 
@@ -122,16 +123,20 @@ code_change(_, State, _) -> {ok, State}.
 
 %%----------------------------------------------------------------------------
 
-unpack(<<"publish.", _/binary>>, Msg) -> unpack(published, none, Msg);
-unpack(<<"deliver.", Q/binary>>, Msg) -> unpack(received, Q, Msg).
+unpack(<<"publish.", _/binary>>, Msg) -> unpack_msg(published, none, Msg);
+unpack(<<"deliver.", Q/binary>>, Msg) -> unpack_msg(received, Q, Msg);
 
-unpack(Type, Q, #amqp_msg{props   = #'P_basic'{headers = H},
-                          payload = Payload}) ->
+unpack(<<"method_in.",  Extra/binary>>, Msg) -> unpack_method(in,  Extra, Msg);
+unpack(<<"method_out.", Extra/binary>>, Msg) -> unpack_method(out, Extra, Msg).
+
+unpack_msg(Type, Q, #amqp_msg{props   = #'P_basic'{headers = H},
+                              payload = Payload}) ->
     {longstr, Node} = table_lookup(H, <<"node">>),
     {longstr, X}    = table_lookup(H, <<"exchange_name">>),
     {array, Keys}   = table_lookup(H, <<"routing_keys">>),
     {table, Props}  = table_lookup(H, <<"properties">>),
     [{timestamp,    rabbit_mgmt_format:timestamp(os:timestamp())},
+     {supertype,    message},
      {type,         Type},
      {exchange,     X},
      {queue,        Q},
@@ -140,7 +145,21 @@ unpack(Type, Q, #amqp_msg{props   = #'P_basic'{headers = H},
      {properties,   Props},
      {payload,      Payload}].
 
-log(text, P, Event) ->
+unpack_method(Type, Extra,
+              #amqp_msg{props = #'P_basic'{headers = H}}) ->
+    Channel = list_to_binary(
+                string:join(
+                  tl(tl(string:tokens(binary_to_list(Extra), "."))), ".")),
+    {longstr, Method} = table_lookup(H, <<"method">>),
+    {table, Params}   = table_lookup(H, <<"parameters">>),
+    [{timestamp,  rabbit_mgmt_format:timestamp(os:timestamp())},
+     {supertype,  method},
+     {type,       Type},
+     {method,     Method},
+     {channel,    Channel},
+     {parameters, Params}].
+
+log(text, message, P, Event) ->
     P("~n~s~n", [string:copies("=", 80)]),
     P("~s: ", [pget(timestamp, Event)]),
     case pget(type, Event) of
@@ -157,9 +176,27 @@ log(text, P, Event) ->
     P("Properties:   ~p~n", [pget(properties, Event)]),
     P("Payload: ~n~s~n",    [pget(payload, Event)]);
 
-log(json, P, Event) ->
+log(text, method, P, Event) ->
+    P("~s ~s ~s ~s(~s)~n",
+      [pget(timestamp, Event),
+       pget(channel, Event),
+       case pget(type, Event) of in -> "->"; out -> "<-" end,
+       pget(method, Event),
+       fmt_params(pget(parameters, Event))]);
+
+log(json, message, P, Event) ->
     Event1 = rabbit_mgmt_format:format(
-               Event,
-               [{fun rabbit_mgmt_format:amqp_table/1, [properties]},
-                {fun base64:encode/1,                 [payload]}]),
+               Event, [{fun rabbit_mgmt_format:amqp_table/1, [properties]},
+                       {fun base64:encode/1,                 [payload]}]),
+    P("~s~n", [mochijson2:encode(Event1)]);
+
+log(json, method, P, Event) ->
+    Event1 = rabbit_mgmt_format:format(
+               Event, [{fun rabbit_mgmt_format:amqp_table/1, [params]}]),
     P("~s~n", [mochijson2:encode(Event1)]).
+
+fmt_params(Params) ->
+    string:join([fmt_param(K, T, V) || {K, T, V} <- Params], ", ").
+
+fmt_param(K, signedint, V) -> io_lib:format("~s=~p", [K, V]);
+fmt_param(K, _T, V) ->        io_lib:format("~s=~s", [K, V]).
