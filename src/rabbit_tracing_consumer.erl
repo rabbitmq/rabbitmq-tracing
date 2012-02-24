@@ -128,8 +128,8 @@ code_change(_, State, _) -> {ok, State}.
 unpack(<<"publish.", _/binary>>, Msg) -> unpack_msg(published, none, Msg);
 unpack(<<"deliver.", Q/binary>>, Msg) -> unpack_msg(received, Q, Msg);
 
-unpack(<<"method_in.",  Extra/binary>>, Msg) -> unpack_method(in,  Extra, Msg);
-unpack(<<"method_out.", Extra/binary>>, Msg) -> unpack_method(out, Extra, Msg).
+unpack(<<"method.in.",  Extra/binary>>, Msg) -> unpack_method(in,  Extra, Msg);
+unpack(<<"method.out.", Extra/binary>>, Msg) -> unpack_method(out, Extra, Msg).
 
 unpack_msg(Type, Q, #amqp_msg{props   = #'P_basic'{headers = H},
                               payload = Payload}) ->
