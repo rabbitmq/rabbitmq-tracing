@@ -79,7 +79,7 @@
               %>
                 <tr<%= alt_rows(i)%>>
                   <td><%= link_trace(file.name) %></td>
-                  <td class="r"><%= fmt_bytes(file.size) %></td>
+                  <td class="r"><%= fmt_bytes_si(file.size) %></td>
                   <td>
                     <form action="#/trace-files" method="delete" class="inline-form">
                       <input type="hidden" name="name" value="<%= fmt_string(file.name) %>"/>
