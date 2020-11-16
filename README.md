@@ -4,6 +4,11 @@ This is an opinionated tracing plugin that extends RabbitMQ management UI.
 It logs messages passing through vhosts [with enabled tracing](https://www.rabbitmq.com/firehose.html) to a log
 file.
 
+## This was migrated to https://github.com/rabbitmq/rabbitmq-server
+
+This repository has been moved to the main unified RabbitMQ "monorepo", including all open issues. You can find the source under [/deps/rabbitmq_tracing](https://github.com/rabbitmq/rabbitmq-server/tree/master/deps/rabbitmq_tracing).
+All issues have been transferred.
+
 ## Usage
 
 This plugin ships with RabbitMQ. Enabled it with `rabbitmq-plugins enable`,
